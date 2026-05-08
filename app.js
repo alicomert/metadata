@@ -39,6 +39,44 @@ export function cleanImageBytes(input, mimeType = "", fileName = "") {
   throw new Error("Desteklenmeyen fotoğraf formatı.");
 }
 
+export function createSyntheticTestMetadata(date = new Date()) {
+  return {
+    make: "Synthetic Test Fixture",
+    model: "Mustafa",
+    software: "Android 15",
+    dateTimeOriginal: formatExifDate(date),
+    userComment: "SYNTHETIC TEST METADATA - NOT ORIGINAL CAMERA CAPTURE",
+  };
+}
+
+export function addSyntheticTestImageMetadata(input, mimeType = "", fileName = "", date = new Date()) {
+  const cleaned = cleanImageBytes(input, mimeType, fileName);
+  const metadata = createSyntheticTestMetadata(date);
+
+  if (cleaned.type === JPEG_MIME) {
+    return {
+      ...cleaned,
+      bytes: addJpegSyntheticMetadata(cleaned.bytes, metadata),
+    };
+  }
+
+  if (cleaned.type === PNG_MIME) {
+    return {
+      ...cleaned,
+      bytes: addPngSyntheticMetadata(cleaned.bytes, metadata),
+    };
+  }
+
+  if (cleaned.type === WEBP_MIME) {
+    return {
+      ...cleaned,
+      bytes: addWebpSyntheticMetadata(cleaned.bytes, metadata),
+    };
+  }
+
+  throw new Error("Test metadata bu fotoğraf formatına eklenemedi.");
+}
+
 export function sanitizeZipFileName(fileName) {
   const parts = String(fileName || "")
     .replace(/\\/g, "/")
@@ -272,6 +310,99 @@ export function cleanWebp(input) {
   return output;
 }
 
+function addJpegSyntheticMetadata(bytes, metadata) {
+  const payload = concatUint8([asciiBytes("Exif\0\0"), buildExifTiff(metadata)]);
+  const length = payload.length + 2;
+
+  if (length > 0xffff) {
+    throw new Error("EXIF test metadata JPEG segmenti için çok büyük.");
+  }
+
+  return concatUint8([
+    bytes.slice(0, 2),
+    Uint8Array.from([0xff, 0xe1, (length >> 8) & 0xff, length & 0xff]),
+    payload,
+    bytes.slice(2),
+  ]);
+}
+
+function addPngSyntheticMetadata(bytes, metadata) {
+  const chunks = [bytes.slice(0, 8)];
+  let offset = 8;
+  let inserted = false;
+
+  while (offset < bytes.length) {
+    const length = readUint32BE(bytes, offset);
+    const type = readAscii(bytes, offset + 4, 4);
+    const chunkEnd = offset + 12 + length;
+    chunks.push(bytes.slice(offset, chunkEnd));
+    offset = chunkEnd;
+
+    if (!inserted && type === "IHDR") {
+      chunks.push(
+        buildPngChunk("eXIf", buildExifTiff(metadata)),
+        buildPngTextChunk("SyntheticTestFixture", metadata.userComment),
+        buildPngTextChunk("Make", metadata.make),
+        buildPngTextChunk("Model", metadata.model),
+        buildPngTextChunk("Software", metadata.software),
+        buildPngTextChunk("DateTimeOriginal", metadata.dateTimeOriginal),
+      );
+      inserted = true;
+    }
+
+    if (type === "IEND") {
+      break;
+    }
+  }
+
+  return concatUint8(chunks);
+}
+
+function addWebpSyntheticMetadata(bytes, metadata) {
+  const exifChunk = buildRiffChunk("EXIF", buildExifTiff(metadata));
+  const xmpChunk = buildRiffChunk("XMP ", asciiBytes(buildSyntheticXmp(metadata)));
+  const chunks = [];
+  let offset = 12;
+  let inserted = false;
+
+  while (offset < bytes.length) {
+    const type = readAscii(bytes, offset, 4);
+    const length = readUint32LE(bytes, offset + 4);
+    const dataEnd = offset + 8 + length;
+    const paddedEnd = dataEnd + (length % 2);
+
+    if (!inserted && (type === "VP8 " || type === "VP8L" || type === "ANIM")) {
+      chunks.push(exifChunk, xmpChunk);
+      inserted = true;
+    }
+
+    const chunk = bytes.slice(offset, paddedEnd);
+    if (type === "VP8X" && length >= 10) {
+      chunk[8] |= 0x0c;
+    }
+    chunks.push(chunk);
+    offset = paddedEnd;
+  }
+
+  if (!inserted) {
+    chunks.push(exifChunk, xmpChunk);
+  }
+
+  const riffSize = 4 + chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const output = new Uint8Array(12 + chunks.reduce((total, chunk) => total + chunk.length, 0));
+  output.set(asciiBytes("RIFF"), 0);
+  writeUint32LE(output, 4, riffSize);
+  output.set(asciiBytes("WEBP"), 8);
+
+  let writeOffset = 12;
+  for (const chunk of chunks) {
+    output.set(chunk, writeOffset);
+    writeOffset += chunk.length;
+  }
+
+  return output;
+}
+
 function getExtension(fileName = "") {
   const cleanName = String(fileName).split("?")[0].split("#")[0];
   const index = cleanName.lastIndexOf(".");
@@ -368,6 +499,143 @@ function readAscii(bytes, offset, length) {
   return value;
 }
 
+function asciiBytes(value) {
+  return new TextEncoder().encode(value);
+}
+
+function formatExifDate(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join(":") + ` ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function buildExifTiff(metadata) {
+  const make = exifAscii(metadata.make);
+  const model = exifAscii(metadata.model);
+  const software = exifAscii(metadata.software);
+  const dateTime = exifAscii(metadata.dateTimeOriginal);
+  const userComment = concatUint8([asciiBytes("ASCII\0\0\0"), asciiBytes(metadata.userComment)]);
+  const ifd0EntryCount = 5;
+  const exifEntryCount = 2;
+  const ifd0Offset = 8;
+  const ifd0DirLength = 2 + ifd0EntryCount * 12 + 4;
+  let ifd0DataOffset = ifd0Offset + ifd0DirLength;
+  const ifd0DataLength = [make, model, software, dateTime]
+    .reduce((total, value) => total + (value.length > 4 ? value.length : 0), 0);
+  const exifIfdOffset = ifd0DataOffset + ifd0DataLength;
+  const exifDirLength = 2 + exifEntryCount * 12 + 4;
+  let exifDataOffset = exifIfdOffset + exifDirLength;
+  const exifDataLength = [dateTime, userComment]
+    .reduce((total, value) => total + (value.length > 4 ? value.length : 0), 0);
+  const output = new Uint8Array(exifDataOffset + exifDataLength);
+
+  output.set(asciiBytes("II"), 0);
+  writeUint16LE(output, 2, 42);
+  writeUint32LE(output, 4, ifd0Offset);
+
+  writeUint16LE(output, ifd0Offset, ifd0EntryCount);
+  let entryOffset = ifd0Offset + 2;
+  ifd0DataOffset = writeExifValueEntry(output, entryOffset, 0x010f, 2, make, ifd0DataOffset);
+  entryOffset += 12;
+  ifd0DataOffset = writeExifValueEntry(output, entryOffset, 0x0110, 2, model, ifd0DataOffset);
+  entryOffset += 12;
+  ifd0DataOffset = writeExifValueEntry(output, entryOffset, 0x0131, 2, software, ifd0DataOffset);
+  entryOffset += 12;
+  ifd0DataOffset = writeExifValueEntry(output, entryOffset, 0x0132, 2, dateTime, ifd0DataOffset);
+  entryOffset += 12;
+  writeExifLongEntry(output, entryOffset, 0x8769, exifIfdOffset);
+  writeUint32LE(output, ifd0Offset + 2 + ifd0EntryCount * 12, 0);
+
+  writeUint16LE(output, exifIfdOffset, exifEntryCount);
+  entryOffset = exifIfdOffset + 2;
+  exifDataOffset = writeExifValueEntry(output, entryOffset, 0x9003, 2, dateTime, exifDataOffset);
+  entryOffset += 12;
+  writeExifValueEntry(output, entryOffset, 0x9286, 7, userComment, exifDataOffset);
+  writeUint32LE(output, exifIfdOffset + 2 + exifEntryCount * 12, 0);
+
+  return output;
+}
+
+function exifAscii(value) {
+  return asciiBytes(`${value}\0`);
+}
+
+function writeExifValueEntry(output, entryOffset, tag, type, value, dataOffset) {
+  writeUint16LE(output, entryOffset, tag);
+  writeUint16LE(output, entryOffset + 2, type);
+  writeUint32LE(output, entryOffset + 4, value.length);
+
+  if (value.length <= 4) {
+    output.set(value, entryOffset + 8);
+    return dataOffset;
+  }
+
+  writeUint32LE(output, entryOffset + 8, dataOffset);
+  output.set(value, dataOffset);
+  return dataOffset + value.length;
+}
+
+function writeExifLongEntry(output, entryOffset, tag, value) {
+  writeUint16LE(output, entryOffset, tag);
+  writeUint16LE(output, entryOffset + 2, 4);
+  writeUint32LE(output, entryOffset + 4, 1);
+  writeUint32LE(output, entryOffset + 8, value);
+}
+
+function buildPngChunk(type, payload) {
+  const typeBytes = asciiBytes(type);
+  const output = new Uint8Array(12 + payload.length);
+  writeUint32BE(output, 0, payload.length);
+  output.set(typeBytes, 4);
+  output.set(payload, 8);
+  writeUint32BE(output, 8 + payload.length, crc32(concatUint8([typeBytes, payload])));
+  return output;
+}
+
+function buildPngTextChunk(keyword, value) {
+  return buildPngChunk("tEXt", concatUint8([asciiBytes(keyword), Uint8Array.of(0), asciiBytes(value)]));
+}
+
+function buildRiffChunk(type, payload) {
+  const padding = payload.length % 2 === 1 ? 1 : 0;
+  const output = new Uint8Array(8 + payload.length + padding);
+  output.set(asciiBytes(type), 0);
+  writeUint32LE(output, 4, payload.length);
+  output.set(payload, 8);
+  return output;
+}
+
+function buildSyntheticXmp(metadata) {
+  return [
+    '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>',
+    '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
+    '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
+    '<rdf:Description rdf:about=""',
+    ` tiff:Make="${escapeXml(metadata.make)}"`,
+    ` tiff:Model="${escapeXml(metadata.model)}"`,
+    ` xmp:CreatorTool="${escapeXml(metadata.software)}"`,
+    ' xmlns:tiff="http://ns.adobe.com/tiff/1.0/"',
+    ' xmlns:xmp="http://ns.adobe.com/xap/1.0/">',
+    `<xmp:CreateDate>${escapeXml(metadata.dateTimeOriginal)}</xmp:CreateDate>`,
+    `<xmp:Label>${escapeXml(metadata.userComment)}</xmp:Label>`,
+    "</rdf:Description>",
+    "</rdf:RDF>",
+    "</x:xmpmeta>",
+    "<?xpacket end=\"w\"?>",
+  ].join("");
+}
+
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function readUint16BE(bytes, offset) {
   return (bytes[offset] << 8) | bytes[offset + 1];
 }
@@ -377,6 +645,13 @@ function readUint32BE(bytes, offset) {
     (bytes[offset] * 0x1000000) +
     ((bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3])
   );
+}
+
+function writeUint32BE(bytes, offset, value) {
+  bytes[offset] = (value >>> 24) & 0xff;
+  bytes[offset + 1] = (value >>> 16) & 0xff;
+  bytes[offset + 2] = (value >>> 8) & 0xff;
+  bytes[offset + 3] = value & 0xff;
 }
 
 function readUint32LE(bytes, offset) {
@@ -506,12 +781,32 @@ async function loadFfmpeg(onStatus) {
   return ffmpegLoadPromise;
 }
 
-async function cleanVideoFile(file, onStatus) {
+async function cleanVideoFile(file, onStatus, mode = "clean") {
   const ffmpeg = await loadFfmpeg(onStatus);
   const extension = getExtension(file.name) || videoMimeToExtension(file.type) || "mp4";
   const token = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const inputName = `input-${token}.${extension}`;
   const outputName = `output-${token}.${extension}`;
+  const args = [
+    "-i",
+    inputName,
+    "-map",
+    "0",
+    "-map_metadata",
+    "-1",
+    "-map_metadata:s",
+    "-1",
+    "-map_chapters",
+    "-1",
+    "-c",
+    "copy",
+  ];
+
+  if (mode === "test") {
+    args.push(...videoSyntheticMetadataArgs(createSyntheticTestMetadata(), extension));
+  }
+
+  args.push(outputName);
 
   ffmpeg.on("progress", ({ progress }) => {
     if (Number.isFinite(progress)) {
@@ -521,21 +816,7 @@ async function cleanVideoFile(file, onStatus) {
 
   try {
     await ffmpeg.writeFile(inputName, new Uint8Array(await file.arrayBuffer()));
-    const exitCode = await ffmpeg.exec([
-      "-i",
-      inputName,
-      "-map",
-      "0",
-      "-map_metadata",
-      "-1",
-      "-map_metadata:s",
-      "-1",
-      "-map_chapters",
-      "-1",
-      "-c",
-      "copy",
-      outputName,
-    ]);
+    const exitCode = await ffmpeg.exec(args);
 
     if (exitCode !== 0) {
       throw new Error("FFmpeg video dosyasını stream-copy ile temizleyemedi.");
@@ -547,6 +828,29 @@ async function cleanVideoFile(file, onStatus) {
     await deleteFfmpegFile(ffmpeg, inputName);
     await deleteFfmpegFile(ffmpeg, outputName);
   }
+}
+
+function videoSyntheticMetadataArgs(metadata, extension) {
+  const args = [
+    "-metadata",
+    `make=${metadata.make}`,
+    "-metadata",
+    `model=${metadata.model}`,
+    "-metadata",
+    `software=${metadata.software}`,
+    "-metadata",
+    `DateTimeOriginal=${metadata.dateTimeOriginal}`,
+    "-metadata",
+    `comment=${metadata.userComment}`,
+    "-metadata",
+    `description=${metadata.userComment}`,
+  ];
+
+  if (extension === "mp4" || extension === "mov" || extension === "m4v") {
+    args.push("-movflags", "use_metadata_tags");
+  }
+
+  return args;
 }
 
 async function deleteFfmpegFile(ffmpeg, fileName) {
@@ -573,13 +877,13 @@ function videoExtensionToMime(extension) {
   return "video/mp4";
 }
 
-function outputFileName(fileName, extensionOverride = "") {
+function outputFileName(fileName, extensionOverride = "", suffix = "temiz") {
   const fallback = "dosya";
   const cleanName = fileName || fallback;
   const dot = cleanName.lastIndexOf(".");
   const base = dot === -1 ? cleanName : cleanName.slice(0, dot);
   const extension = extensionOverride || (dot === -1 ? "" : cleanName.slice(dot + 1));
-  return `${base}-temiz${extension ? `.${extension}` : ""}`;
+  return `${base}-${suffix}${extension ? `.${extension}` : ""}`;
 }
 
 function formatBytes(bytes) {
@@ -610,6 +914,7 @@ function initApp() {
   const downloadAllButton = document.querySelector("[data-download-all]");
   const chooseButton = document.querySelector("[data-choose]");
   const chooseFolderButton = document.querySelector("[data-choose-folder]");
+  const modeInputs = Array.from(document.querySelectorAll("[data-mode]"));
   const items = [];
   let processing = false;
 
@@ -649,10 +954,18 @@ function initApp() {
     renderSummary();
   });
   downloadAllButton.addEventListener("click", downloadCleanedZip);
+  modeInputs.forEach((input) => {
+    input.addEventListener("change", renderSummary);
+  });
+
+  function selectedMode() {
+    return modeInputs.find((input) => input.checked)?.value || "clean";
+  }
 
   function addFiles(files) {
+    const mode = selectedMode();
     for (const file of files) {
-      const item = createQueueItem(file);
+      const item = createQueueItem(file, mode);
       items.push(item);
       queue.append(item.element);
     }
@@ -679,6 +992,8 @@ function initApp() {
 
   async function processItem(item) {
     const { file } = item;
+    const mode = item.mode || "clean";
+    const outputSuffix = mode === "test" ? "test-metadata" : "temiz";
 
     try {
       if (!isSupportedImage(file) && !isSupportedVideo(file)) {
@@ -689,27 +1004,35 @@ function initApp() {
       setItemStatus(item, "working", "İşleniyor");
 
       if (isSupportedImage(file)) {
-        const result = cleanImageBytes(await file.arrayBuffer(), file.type, file.name);
+        const inputBytes = await file.arrayBuffer();
+        const result = mode === "test"
+          ? addSyntheticTestImageMetadata(inputBytes, file.type, file.name)
+          : cleanImageBytes(inputBytes, file.type, file.name);
         const blob = new Blob([result.bytes], { type: result.type });
         setItemOutput(
           item,
           blob,
-          outputFileName(file.name, result.extension),
-          outputFileName(file.webkitRelativePath || file.name, result.extension),
+          outputFileName(file.name, result.extension, outputSuffix),
+          outputFileName(file.webkitRelativePath || file.name, result.extension, outputSuffix),
         );
-        setItemStatus(item, "done", "Temizlendi");
+        setItemStatus(item, "done", mode === "test" ? "Test metadata eklendi" : "Temizlendi");
         return;
       }
 
-      const blob = await cleanVideoFile(file, (message) => setItemStatus(item, "working", message));
-      setItemOutput(item, blob, outputFileName(file.name), outputFileName(file.webkitRelativePath || file.name));
-      setItemStatus(item, "done", "Temizlendi");
+      const blob = await cleanVideoFile(file, (message) => setItemStatus(item, "working", message), mode);
+      setItemOutput(
+        item,
+        blob,
+        outputFileName(file.name, "", outputSuffix),
+        outputFileName(file.webkitRelativePath || file.name, "", outputSuffix),
+      );
+      setItemStatus(item, "done", mode === "test" ? "Test metadata eklendi" : "Temizlendi");
     } catch (error) {
       setItemStatus(item, "error", error instanceof Error ? error.message : "İşlem tamamlanamadı");
     }
   }
 
-  function createQueueItem(file) {
+  function createQueueItem(file, mode) {
     const row = document.createElement("li");
     row.className = "file-row";
     row.innerHTML = `
@@ -729,6 +1052,7 @@ function initApp() {
     return {
       element: row,
       file,
+      mode,
       blob: null,
       outputName: "",
       outputPath: "",
@@ -796,7 +1120,8 @@ function initApp() {
     const failed = items.filter((item) => item.state === "error").length;
     const pending = items.filter((item) => item.state === "pending" || item.state === "working").length;
     downloadAllButton.disabled = done === 0 || pending > 0;
-    summary.textContent = `${items.length} dosya · ${done} temiz · ${pending} bekliyor/işleniyor · ${failed} hata`;
+    const readyLabel = selectedMode() === "test" ? "test metadata" : "temiz";
+    summary.textContent = `${items.length} dosya · ${done} ${readyLabel} · ${pending} bekliyor/işleniyor · ${failed} hata`;
   }
 }
 

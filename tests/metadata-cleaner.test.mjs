@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  addSyntheticTestImageMetadata,
   cleanImageBytes,
   cleanJpeg,
   cleanPng,
   cleanWebp,
   createStoredZip,
+  createSyntheticTestMetadata,
   isSupportedImage,
   isSupportedVideo,
   sanitizeZipFileName,
@@ -154,6 +156,58 @@ test("cleanImageBytes trusts real file signatures before misleading PNG MIME dat
   assert.equal(jpegResult.extension, "jpg");
   assert.equal(webpResult.type, "image/webp");
   assert.equal(webpResult.extension, "webp");
+});
+
+test("createSyntheticTestMetadata labels generated metadata as synthetic", () => {
+  const metadata = createSyntheticTestMetadata(new Date(Date.UTC(2026, 4, 8, 14, 22, 11)));
+
+  assert.equal(metadata.make, "Synthetic Test Fixture");
+  assert.equal(metadata.model, "Mustafa");
+  assert.equal(metadata.software, "Android 15");
+  assert.equal(metadata.dateTimeOriginal, "2026:05:08 14:22:11");
+  assert.match(metadata.userComment, /SYNTHETIC TEST METADATA/);
+});
+
+test("addSyntheticTestImageMetadata writes labeled synthetic EXIF into JPEG after cleaning old metadata", () => {
+  const result = addSyntheticTestImageMetadata(
+    makeJpeg(),
+    "image/jpeg",
+    "photo.jpg",
+    new Date(Date.UTC(2026, 4, 8, 14, 22, 11)),
+  );
+  const text = new TextDecoder().decode(result.bytes);
+
+  assert.equal(result.type, "image/jpeg");
+  assert.equal(result.extension, "jpg");
+  assert.match(text, /Exif/);
+  assert.match(text, /Synthetic Test Fixture/);
+  assert.match(text, /Mustafa/);
+  assert.match(text, /Android 15/);
+  assert.match(text, /2026:05:08 14:22:11/);
+  assert.match(text, /SYNTHETIC TEST METADATA/);
+  assert.doesNotMatch(text, /Photoshop/);
+  assert.doesNotMatch(text, /secret!/);
+});
+
+test("addSyntheticTestImageMetadata writes labeled synthetic metadata into PNG and WebP", () => {
+  const fixedDate = new Date(Date.UTC(2026, 4, 8, 14, 22, 11));
+  const pngResult = addSyntheticTestImageMetadata(makePng(), "image/png", "photo.png", fixedDate);
+  const webpResult = addSyntheticTestImageMetadata(makeWebp(), "image/webp", "photo.webp", fixedDate);
+  const pngText = new TextDecoder().decode(pngResult.bytes);
+  const webpText = new TextDecoder().decode(webpResult.bytes);
+
+  assert.equal(pngResult.type, "image/png");
+  assert.match(pngText, /eXIf/);
+  assert.match(pngText, /Synthetic Test Fixture/);
+  assert.match(pngText, /SYNTHETIC TEST METADATA/);
+  assert.doesNotMatch(pngText, /Comment\u0000secret/);
+
+  assert.equal(webpResult.type, "image/webp");
+  assert.match(webpText, /EXIF/);
+  assert.match(webpText, /XMP /);
+  assert.match(webpText, /Mustafa/);
+  assert.match(webpText, /SYNTHETIC TEST METADATA/);
+  assert.equal(webpResult.bytes[20] & 0x0c, 0x0c);
 });
 
 test("supported type checks accept intended images and videos only", () => {
