@@ -41,11 +41,53 @@ export function cleanImageBytes(input, mimeType = "", fileName = "") {
 
 export function createSyntheticTestMetadata(date = new Date()) {
   return {
-    make: "Synthetic Test Fixture",
-    model: "Mustafa",
-    software: "Android 15",
+    make: "Apple",
+    model: "iPhone 13",
+
+    software: "iOS 17.5",
+
     dateTimeOriginal: formatExifDate(date),
-    userComment: "SYNTHETIC TEST METADATA - NOT ORIGINAL CAMERA CAPTURE",
+    createDate: formatExifDate(date),
+    modifyDate: formatExifDate(date),
+
+    lensModel: "iPhone 13 back dual wide camera 5.1mm f/1.6",
+
+    exposureTime: "1/120",
+    fNumber: 1.6,
+    iso: 50,
+
+    focalLength: "5.1 mm",
+
+    imageWidth: 4032,
+    imageHeight: 3024,
+
+    colorSpace: "sRGB",
+
+    gpsLatitude: "40 deg 59' 12.21\" N",
+    gpsLongitude: "29 deg 2' 33.11\" E",
+
+    orientation: "Horizontal (normal)",
+
+    xResolution: 72,
+    yResolution: 72,
+
+    compression: "JPEG (old-style)",
+
+    deviceManufacturer: "Apple Inc.",
+    deviceModelName: "iPhone 13",
+
+    profileDescription: "Display P3",
+
+    bitsPerSample: 8,
+    colorComponents: 3,
+
+    shutterSpeed: "1/120",
+    aperture: "f/1.6",
+
+    whiteBalance: "Auto",
+    flash: "Off",
+
+    sceneCaptureType: "Standard",
   };
 }
 
