@@ -295,6 +295,16 @@ function toUint8Array(input) {
 }
 
 function detectImageType(bytes, mimeType, fileName) {
+  if (bytes[0] === 0xff && bytes[1] === 0xd8) {
+    return JPEG_MIME;
+  }
+  if (isPngSignature(bytes)) {
+    return PNG_MIME;
+  }
+  if (readAscii(bytes, 0, 4) === "RIFF" && readAscii(bytes, 8, 4) === "WEBP") {
+    return WEBP_MIME;
+  }
+
   const mimeMatch = imageMimeToType(mimeType);
   if (mimeMatch) {
     return mimeMatch;
@@ -311,17 +321,21 @@ function detectImageType(bytes, mimeType, fileName) {
     return WEBP_MIME;
   }
 
-  if (bytes[0] === 0xff && bytes[1] === 0xd8) {
-    return JPEG_MIME;
-  }
-  if (readAscii(bytes, 1, 3) === "PNG") {
-    return PNG_MIME;
-  }
-  if (readAscii(bytes, 0, 4) === "RIFF" && readAscii(bytes, 8, 4) === "WEBP") {
-    return WEBP_MIME;
-  }
-
   return null;
+}
+
+function isPngSignature(bytes) {
+  return (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  );
 }
 
 function imageMimeToType(mimeType = "") {

@@ -146,6 +146,16 @@ test("cleanImageBytes dispatches by MIME type and file extension", () => {
   assert.equal(cleanImageBytes(makeWebp(), "image/webp", "photo.webp").type, "image/webp");
 });
 
+test("cleanImageBytes trusts real file signatures before misleading PNG MIME data", () => {
+  const jpegResult = cleanImageBytes(makeJpeg(), "image/png", "55176.png");
+  const webpResult = cleanImageBytes(makeWebp(), "image/png", "55176.png");
+
+  assert.equal(jpegResult.type, "image/jpeg");
+  assert.equal(jpegResult.extension, "jpg");
+  assert.equal(webpResult.type, "image/webp");
+  assert.equal(webpResult.extension, "webp");
+});
+
 test("supported type checks accept intended images and videos only", () => {
   assert.equal(isSupportedImage({ type: "image/jpeg", name: "a.JPG" }), true);
   assert.equal(isSupportedImage({ type: "application/pdf", name: "a.pdf" }), false);
