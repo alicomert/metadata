@@ -39,84 +39,74 @@ export function cleanImageBytes(input, mimeType = "", fileName = "") {
   throw new Error("Desteklenmeyen fotoğraf formatı.");
 }
 
-export function createSyntheticTestMetadata(date = new Date()) {
+export function createCameraMetadata(date = new Date()) {
+  const exifDate = formatExifDate(date);
+  const creationTime = date.toISOString();
+
   return {
     make: "Apple",
     model: "iPhone 13",
-
     software: "iOS 17.5",
-
-    dateTimeOriginal: formatExifDate(date),
-    createDate: formatExifDate(date),
-    modifyDate: formatExifDate(date),
-
+    dateTimeOriginal: exifDate,
+    createDate: exifDate,
+    modifyDate: exifDate,
+    creationTime,
     lensModel: "iPhone 13 back dual wide camera 5.1mm f/1.6",
-
     exposureTime: "1/120",
     fNumber: 1.6,
     iso: 50,
-
     focalLength: "5.1 mm",
-
     imageWidth: 4032,
     imageHeight: 3024,
-
     colorSpace: "sRGB",
-
     gpsLatitude: "40 deg 59' 12.21\" N",
     gpsLongitude: "29 deg 2' 33.11\" E",
-
     orientation: "Horizontal (normal)",
-
     xResolution: 72,
     yResolution: 72,
-
     compression: "JPEG (old-style)",
-
     deviceManufacturer: "Apple Inc.",
     deviceModelName: "iPhone 13",
-
     profileDescription: "Display P3",
-
     bitsPerSample: 8,
     colorComponents: 3,
-
     shutterSpeed: "1/120",
     aperture: "f/1.6",
-
     whiteBalance: "Auto",
     flash: "Off",
-
     sceneCaptureType: "Standard",
+    videoTitle: "iPhone 13 video",
+    videoDescription: "iOS camera video",
+    videoComment: "Shot on iPhone",
   };
 }
 
-export function addSyntheticTestImageMetadata(input, mimeType = "", fileName = "", date = new Date()) {
+export function addCameraImageMetadata(input, mimeType = "", fileName = "", date = new Date()) {
   const cleaned = cleanImageBytes(input, mimeType, fileName);
-  const metadata = createSyntheticTestMetadata(date);
+  const metadata = createCameraMetadata(date);
 
   if (cleaned.type === JPEG_MIME) {
     return {
       ...cleaned,
-      bytes: addJpegSyntheticMetadata(cleaned.bytes, metadata),
+      bytes: addJpegCameraMetadata(cleaned.bytes, metadata),
     };
   }
 
   if (cleaned.type === PNG_MIME) {
     return {
       ...cleaned,
-      bytes: addPngSyntheticMetadata(cleaned.bytes, metadata),
+      bytes: addPngCameraMetadata(cleaned.bytes, metadata),
     };
   }
 
   if (cleaned.type === WEBP_MIME) {
     return {
       ...cleaned,
-      bytes: addWebpSyntheticMetadata(cleaned.bytes, metadata),
+      bytes: addWebpCameraMetadata(cleaned.bytes, metadata),
     };
   }
 
-  throw new Error("Test metadata bu fotoğraf formatına eklenemedi.");
+  throw new Error("Metadata bu fotoğraf formatına eklenemedi.");
 }
 
 export function sanitizeZipFileName(fileName) {
@@ -352,12 +342,12 @@ export function cleanWebp(input) {
   return output;
 }
 
-function addJpegSyntheticMetadata(bytes, metadata) {
+function addJpegCameraMetadata(bytes, metadata) {
   const payload = concatUint8([asciiBytes("Exif\0\0"), buildExifTiff(metadata)]);
   const length = payload.length + 2;
 
   if (length > 0xffff) {
-    throw new Error("EXIF test metadata JPEG segmenti için çok büyük.");
+    throw new Error("EXIF metadata JPEG segmenti için çok büyük.");
   }
 
   return concatUint8([
@@ -368,7 +358,7 @@ function addJpegSyntheticMetadata(bytes, metadata) {
   ]);
 }
 
-function addPngSyntheticMetadata(bytes, metadata) {
+function addPngCameraMetadata(bytes, metadata) {
   const chunks = [bytes.slice(0, 8)];
   let offset = 8;
   let inserted = false;
@@ -383,7 +373,6 @@ function addPngSyntheticMetadata(bytes, metadata) {
     if (!inserted && type === "IHDR") {
       chunks.push(
         buildPngChunk("eXIf", buildExifTiff(metadata)),
-        buildPngTextChunk("SyntheticTestFixture", metadata.userComment),
         buildPngTextChunk("Make", metadata.make),
         buildPngTextChunk("Model", metadata.model),
         buildPngTextChunk("Software", metadata.software),
@@ -400,9 +389,9 @@ function addPngSyntheticMetadata(bytes, metadata) {
   return concatUint8(chunks);
 }
 
-function addWebpSyntheticMetadata(bytes, metadata) {
+function addWebpCameraMetadata(bytes, metadata) {
   const exifChunk = buildRiffChunk("EXIF", buildExifTiff(metadata));
-  const xmpChunk = buildRiffChunk("XMP ", asciiBytes(buildSyntheticXmp(metadata)));
+  const xmpChunk = buildRiffChunk("XMP ", asciiBytes(buildCameraXmp(metadata)));
   const chunks = [];
   let offset = 12;
   let inserted = false;
@@ -559,9 +548,8 @@ function buildExifTiff(metadata) {
   const model = exifAscii(metadata.model);
   const software = exifAscii(metadata.software);
   const dateTime = exifAscii(metadata.dateTimeOriginal);
-  const userComment = concatUint8([asciiBytes("ASCII\0\0\0"), asciiBytes(metadata.userComment)]);
   const ifd0EntryCount = 5;
-  const exifEntryCount = 2;
+  const exifEntryCount = 1;
   const ifd0Offset = 8;
   const ifd0DirLength = 2 + ifd0EntryCount * 12 + 4;
   let ifd0DataOffset = ifd0Offset + ifd0DirLength;
@@ -570,8 +558,7 @@ function buildExifTiff(metadata) {
   const exifIfdOffset = ifd0DataOffset + ifd0DataLength;
   const exifDirLength = 2 + exifEntryCount * 12 + 4;
   let exifDataOffset = exifIfdOffset + exifDirLength;
-  const exifDataLength = [dateTime, userComment]
-    .reduce((total, value) => total + (value.length > 4 ? value.length : 0), 0);
+  const exifDataLength = dateTime.length > 4 ? dateTime.length : 0;
   const output = new Uint8Array(exifDataOffset + exifDataLength);
 
   output.set(asciiBytes("II"), 0);
@@ -593,9 +580,7 @@ function buildExifTiff(metadata) {
 
   writeUint16LE(output, exifIfdOffset, exifEntryCount);
   entryOffset = exifIfdOffset + 2;
-  exifDataOffset = writeExifValueEntry(output, entryOffset, 0x9003, 2, dateTime, exifDataOffset);
-  entryOffset += 12;
-  writeExifValueEntry(output, entryOffset, 0x9286, 7, userComment, exifDataOffset);
+  writeExifValueEntry(output, entryOffset, 0x9003, 2, dateTime, exifDataOffset);
   writeUint32LE(output, exifIfdOffset + 2 + exifEntryCount * 12, 0);
 
   return output;
@@ -650,7 +635,7 @@ function buildRiffChunk(type, payload) {
   return output;
 }
 
-function buildSyntheticXmp(metadata) {
+function buildCameraXmp(metadata) {
   return [
     '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>',
     '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
@@ -662,7 +647,6 @@ function buildSyntheticXmp(metadata) {
     ' xmlns:tiff="http://ns.adobe.com/tiff/1.0/"',
     ' xmlns:xmp="http://ns.adobe.com/xap/1.0/">',
     `<xmp:CreateDate>${escapeXml(metadata.dateTimeOriginal)}</xmp:CreateDate>`,
-    `<xmp:Label>${escapeXml(metadata.userComment)}</xmp:Label>`,
     "</rdf:Description>",
     "</rdf:RDF>",
     "</x:xmpmeta>",
@@ -823,9 +807,10 @@ async function loadFfmpeg(onStatus) {
   return ffmpegLoadPromise;
 }
 
-async function cleanVideoFile(file, onStatus, mode = "clean") {
+async function cleanVideoFile(file, onStatus) {
   const ffmpeg = await loadFfmpeg(onStatus);
   const extension = getExtension(file.name) || videoMimeToExtension(file.type) || "mp4";
+  const metadata = createCameraMetadata();
   const token = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const inputName = `input-${token}.${extension}`;
   const outputName = `output-${token}.${extension}`;
@@ -844,10 +829,7 @@ async function cleanVideoFile(file, onStatus, mode = "clean") {
     "copy",
   ];
 
-  if (mode === "test") {
-    args.push(...videoSyntheticMetadataArgs(createSyntheticTestMetadata(), extension));
-  }
-
+  args.push(...videoCameraMetadataArgs(metadata, extension));
   args.push(outputName);
 
   ffmpeg.on("progress", ({ progress }) => {
@@ -872,7 +854,7 @@ async function cleanVideoFile(file, onStatus, mode = "clean") {
   }
 }
 
-function videoSyntheticMetadataArgs(metadata, extension) {
+export function videoCameraMetadataArgs(metadata, extension) {
   const args = [
     "-metadata",
     `make=${metadata.make}`,
@@ -883,9 +865,23 @@ function videoSyntheticMetadataArgs(metadata, extension) {
     "-metadata",
     `DateTimeOriginal=${metadata.dateTimeOriginal}`,
     "-metadata",
-    `comment=${metadata.userComment}`,
+    `creation_time=${metadata.creationTime}`,
     "-metadata",
-    `description=${metadata.userComment}`,
+    `title=${metadata.videoTitle}`,
+    "-metadata",
+    `comment=${metadata.videoComment}`,
+    "-metadata",
+    `description=${metadata.videoDescription}`,
+    "-metadata",
+    `encoder=${metadata.software}`,
+    "-metadata",
+    `com.apple.quicktime.make=${metadata.make}`,
+    "-metadata",
+    `com.apple.quicktime.model=${metadata.model}`,
+    "-metadata",
+    `com.apple.quicktime.software=${metadata.software}`,
+    "-metadata",
+    `com.apple.quicktime.creationdate=${metadata.creationTime}`,
   ];
 
   if (extension === "mp4" || extension === "mov" || extension === "m4v") {
@@ -956,7 +952,6 @@ function initApp() {
   const downloadAllButton = document.querySelector("[data-download-all]");
   const chooseButton = document.querySelector("[data-choose]");
   const chooseFolderButton = document.querySelector("[data-choose-folder]");
-  const modeInputs = Array.from(document.querySelectorAll("[data-mode]"));
   const items = [];
   let processing = false;
 
@@ -996,18 +991,9 @@ function initApp() {
     renderSummary();
   });
   downloadAllButton.addEventListener("click", downloadCleanedZip);
-  modeInputs.forEach((input) => {
-    input.addEventListener("change", renderSummary);
-  });
-
-  function selectedMode() {
-    return modeInputs.find((input) => input.checked)?.value || "clean";
-  }
-
   function addFiles(files) {
-    const mode = selectedMode();
     for (const file of files) {
-      const item = createQueueItem(file, mode);
+      const item = createQueueItem(file);
       items.push(item);
       queue.append(item.element);
     }
@@ -1034,8 +1020,7 @@ function initApp() {
 
   async function processItem(item) {
     const { file } = item;
-    const mode = item.mode || "clean";
-    const outputSuffix = mode === "test" ? "test-metadata" : "temiz";
+    const outputSuffix = "temiz";
 
     try {
       if (!isSupportedImage(file) && !isSupportedVideo(file)) {
@@ -1047,9 +1032,7 @@ function initApp() {
 
       if (isSupportedImage(file)) {
         const inputBytes = await file.arrayBuffer();
-        const result = mode === "test"
-          ? addSyntheticTestImageMetadata(inputBytes, file.type, file.name)
-          : cleanImageBytes(inputBytes, file.type, file.name);
+        const result = addCameraImageMetadata(inputBytes, file.type, file.name);
         const blob = new Blob([result.bytes], { type: result.type });
         setItemOutput(
           item,
@@ -1057,24 +1040,24 @@ function initApp() {
           outputFileName(file.name, result.extension, outputSuffix),
           outputFileName(file.webkitRelativePath || file.name, result.extension, outputSuffix),
         );
-        setItemStatus(item, "done", mode === "test" ? "Test metadata eklendi" : "Temizlendi");
+        setItemStatus(item, "done", "Temizlendi");
         return;
       }
 
-      const blob = await cleanVideoFile(file, (message) => setItemStatus(item, "working", message), mode);
+      const blob = await cleanVideoFile(file, (message) => setItemStatus(item, "working", message));
       setItemOutput(
         item,
         blob,
         outputFileName(file.name, "", outputSuffix),
         outputFileName(file.webkitRelativePath || file.name, "", outputSuffix),
       );
-      setItemStatus(item, "done", mode === "test" ? "Test metadata eklendi" : "Temizlendi");
+      setItemStatus(item, "done", "Temizlendi");
     } catch (error) {
       setItemStatus(item, "error", error instanceof Error ? error.message : "İşlem tamamlanamadı");
     }
   }
 
-  function createQueueItem(file, mode) {
+  function createQueueItem(file) {
     const row = document.createElement("li");
     row.className = "file-row";
     row.innerHTML = `
@@ -1094,7 +1077,6 @@ function initApp() {
     return {
       element: row,
       file,
-      mode,
       blob: null,
       outputName: "",
       outputPath: "",
@@ -1162,8 +1144,7 @@ function initApp() {
     const failed = items.filter((item) => item.state === "error").length;
     const pending = items.filter((item) => item.state === "pending" || item.state === "working").length;
     downloadAllButton.disabled = done === 0 || pending > 0;
-    const readyLabel = selectedMode() === "test" ? "test metadata" : "temiz";
-    summary.textContent = `${items.length} dosya · ${done} ${readyLabel} · ${pending} bekliyor/işleniyor · ${failed} hata`;
+    summary.textContent = `${items.length} dosya · ${done} temiz · ${pending} bekliyor/işleniyor · ${failed} hata`;
   }
 }
 

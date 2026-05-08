@@ -96,30 +96,17 @@
         font-size: 0.9rem;
       }
 
-      .mode-options {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-      }
-
-      .mode-option {
+      .mode-action {
         min-height: 42px;
         display: inline-flex;
         align-items: center;
-        gap: 8px;
         padding: 0 12px;
-        border: 1px solid var(--line);
+        border: 1px solid var(--accent);
         border-radius: 7px;
-        background: #fff;
-        font-weight: 800;
-        cursor: pointer;
-      }
-
-      .mode-option:has(input:checked) {
-        border-color: var(--accent);
-        color: var(--accent-dark);
         background: #eef8fb;
+        color: var(--accent-dark);
+        font-weight: 800;
+        white-space: nowrap;
       }
 
       .drop-zone,
@@ -376,10 +363,6 @@
           flex-direction: column;
         }
 
-        .mode-options {
-          justify-content: stretch;
-        }
-
         .drop-zone {
           min-height: 280px;
         }
@@ -409,7 +392,7 @@
         .status,
         .download,
         .queue-actions button,
-        .mode-option {
+        .mode-action {
           width: 100%;
         }
       }
@@ -428,18 +411,9 @@
       <section class="mode-panel" aria-label="İşlem modu">
         <div>
           <p class="mode-title">İşlem modu</p>
-          <p class="mode-copy">Test metadata modu synthetic olarak işaretlenir.</p>
+          <p class="mode-copy">Dosyalar temizlenir ve kamera bilgileri yeniden yazılır.</p>
         </div>
-        <div class="mode-options">
-          <label class="mode-option">
-            <input type="radio" name="metadata-mode" value="clean" data-mode checked>
-            Metadata sil
-          </label>
-          <label class="mode-option">
-            <input type="radio" name="metadata-mode" value="test" data-mode>
-            Test metadata ekle
-          </label>
-        </div>
+        <div class="mode-action">Metadata sil</div>
       </section>
 
       <section class="workspace" aria-label="Metadata temizleme aracı">
