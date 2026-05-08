@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
-    <title>Metadata Silici</title>
+    <title>Toplu Metadata Silici</title>
     <style>
       :root {
         --bg: #f6f7f9;
@@ -181,6 +181,13 @@
         border-bottom: 1px solid var(--line);
       }
 
+      .queue-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
       .queue-title {
         margin: 0 0 4px;
         font-size: 1.05rem;
@@ -331,12 +338,19 @@
           padding: 14px;
         }
 
+        .queue-header,
+        .queue-actions {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
         .file-row {
           grid-template-columns: 1fr;
         }
 
         .status,
-        .download {
+        .download,
+        .queue-actions button {
           width: 100%;
         }
       }
@@ -346,8 +360,8 @@
     <main class="shell">
       <header>
         <div>
-          <h1>Metadata Silici</h1>
-          <p class="lede">Fotoğraf ve videolardaki gömülü bilgileri tarayıcı içinde temizler. Orijinal dosyaya dokunmaz.</p>
+          <h1>Toplu Metadata Silici</h1>
+          <p class="lede">Fotoğraf ve videolardaki gömülü bilgileri toplu şekilde tarayıcı içinde temizler. Orijinal dosyalara dokunmaz.</p>
         </div>
         <div class="privacy">Yerel işlem</div>
       </header>
@@ -356,10 +370,11 @@
         <div class="drop-zone" data-drop-zone>
           <div class="drop-content">
             <div class="drop-icon" aria-hidden="true">+</div>
-            <p class="drop-title">Dosyaları bırak</p>
+            <p class="drop-title">Dosya veya klasör bırak</p>
             <p class="drop-copy">JPG, JPEG, PNG, WebP, MP4, MOV, M4V, WebM ve MKV desteklenir.</p>
             <div class="actions">
               <button class="primary" type="button" data-choose>Dosya seç</button>
+              <button class="secondary" type="button" data-choose-folder>Klasör seç</button>
             </div>
           </div>
         </div>
@@ -370,7 +385,10 @@
               <h2 class="queue-title">Kuyruk</h2>
               <p class="summary" data-summary>0 dosya · 0 temiz · 0 bekliyor/işleniyor · 0 hata</p>
             </div>
-            <button class="secondary" type="button" data-clear disabled>Temizle</button>
+            <div class="queue-actions">
+              <button class="primary" type="button" data-download-all disabled>Tümünü ZIP indir</button>
+              <button class="secondary" type="button" data-clear disabled>Temizle</button>
+            </div>
           </div>
           <p class="empty" data-empty>Henüz dosya seçilmedi.</p>
           <ul class="queue" data-queue></ul>
@@ -388,6 +406,15 @@
         type="file"
         data-file-picker
         accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.m4v,.webm,.mkv,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm,video/x-matroska"
+        multiple
+      >
+      <input
+        class="visually-hidden"
+        type="file"
+        data-folder-picker
+        accept=".jpg,.jpeg,.png,.webp,.mp4,.mov,.m4v,.webm,.mkv,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm,video/x-matroska"
+        webkitdirectory
+        directory
         multiple
       >
     </main>

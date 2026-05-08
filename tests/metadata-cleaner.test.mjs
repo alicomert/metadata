@@ -5,8 +5,10 @@ import {
   cleanJpeg,
   cleanPng,
   cleanWebp,
+  createStoredZip,
   isSupportedImage,
   isSupportedVideo,
+  sanitizeZipFileName,
 } from "../app.js";
 
 const encoder = new TextEncoder();
@@ -151,3 +153,36 @@ test("supported type checks accept intended images and videos only", () => {
   assert.equal(isSupportedVideo({ type: "", name: "clip.mov" }), true);
   assert.equal(isSupportedVideo({ type: "application/pdf", name: "a.pdf" }), false);
 });
+
+test("sanitizeZipFileName keeps folder structure and removes unsafe path parts", () => {
+  assert.equal(sanitizeZipFileName("photos/../secret.jpg"), "photos/secret.jpg");
+  assert.equal(sanitizeZipFileName("/album//image temiz.jpg"), "album/image temiz.jpg");
+  assert.equal(sanitizeZipFileName(""), "dosya");
+});
+
+test("createStoredZip creates a valid no-compression ZIP with unique cleaned entries", () => {
+  const zip = createStoredZip([
+    { name: "album/photo-temiz.jpg", bytes: ascii("clean image") },
+    { name: "album/photo-temiz.jpg", bytes: ascii("clean image duplicate") },
+    { name: "../video-temiz.mp4", bytes: ascii("clean video") },
+  ]);
+  const text = new TextDecoder().decode(zip);
+
+  assert.equal(readUint32LE(zip, 0), 0x04034b50);
+  assert.match(text, /album\/photo-temiz\.jpg/);
+  assert.match(text, /album\/photo-temiz-2\.jpg/);
+  assert.match(text, /video-temiz\.mp4/);
+  assert.match(text, /clean image/);
+  assert.match(text, /clean image duplicate/);
+  assert.match(text, /clean video/);
+  assert.equal(readUint32LE(zip, zip.length - 22), 0x06054b50);
+});
+
+function readUint32LE(bytes, offset) {
+  return (
+    bytes[offset] |
+    (bytes[offset + 1] << 8) |
+    (bytes[offset + 2] << 16) |
+    (bytes[offset + 3] * 0x1000000)
+  ) >>> 0;
+}

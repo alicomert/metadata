@@ -39,6 +39,83 @@ export function cleanImageBytes(input, mimeType = "", fileName = "") {
   throw new Error("Desteklenmeyen fotoğraf formatı.");
 }
 
+export function sanitizeZipFileName(fileName) {
+  const parts = String(fileName || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((part) => part.replace(/[\x00-\x1f\x7f]/g, "").trim())
+    .filter((part) => part && part !== "." && part !== "..");
+
+  return parts.join("/") || "dosya";
+}
+
+export function createStoredZip(entries) {
+  const encoder = new TextEncoder();
+  const localChunks = [];
+  const centralChunks = [];
+  const usedNames = new Set();
+  let offset = 0;
+
+  for (const entry of entries) {
+    const data = normalizeZipBytes(entry.bytes);
+    const name = uniqueZipName(sanitizeZipFileName(entry.name), usedNames);
+    const nameBytes = encoder.encode(name);
+    const crc = crc32(data);
+    const localHeader = new Uint8Array(30 + nameBytes.length);
+
+    writeUint32LE(localHeader, 0, 0x04034b50);
+    writeUint16LE(localHeader, 4, 20);
+    writeUint16LE(localHeader, 6, 0x0800);
+    writeUint16LE(localHeader, 8, 0);
+    writeUint16LE(localHeader, 10, 0);
+    writeUint16LE(localHeader, 12, 0);
+    writeUint32LE(localHeader, 14, crc);
+    writeUint32LE(localHeader, 18, data.length);
+    writeUint32LE(localHeader, 22, data.length);
+    writeUint16LE(localHeader, 26, nameBytes.length);
+    writeUint16LE(localHeader, 28, 0);
+    localHeader.set(nameBytes, 30);
+    localChunks.push(localHeader, data);
+
+    const centralHeader = new Uint8Array(46 + nameBytes.length);
+    writeUint32LE(centralHeader, 0, 0x02014b50);
+    writeUint16LE(centralHeader, 4, 20);
+    writeUint16LE(centralHeader, 6, 20);
+    writeUint16LE(centralHeader, 8, 0x0800);
+    writeUint16LE(centralHeader, 10, 0);
+    writeUint16LE(centralHeader, 12, 0);
+    writeUint16LE(centralHeader, 14, 0);
+    writeUint32LE(centralHeader, 16, crc);
+    writeUint32LE(centralHeader, 20, data.length);
+    writeUint32LE(centralHeader, 24, data.length);
+    writeUint16LE(centralHeader, 28, nameBytes.length);
+    writeUint16LE(centralHeader, 30, 0);
+    writeUint16LE(centralHeader, 32, 0);
+    writeUint16LE(centralHeader, 34, 0);
+    writeUint16LE(centralHeader, 36, 0);
+    writeUint32LE(centralHeader, 38, 0);
+    writeUint32LE(centralHeader, 42, offset);
+    centralHeader.set(nameBytes, 46);
+    centralChunks.push(centralHeader);
+
+    offset += localHeader.length + data.length;
+  }
+
+  const centralOffset = offset;
+  const centralSize = centralChunks.reduce((total, chunk) => total + chunk.length, 0);
+  const endRecord = new Uint8Array(22);
+  writeUint32LE(endRecord, 0, 0x06054b50);
+  writeUint16LE(endRecord, 4, 0);
+  writeUint16LE(endRecord, 6, 0);
+  writeUint16LE(endRecord, 8, entries.length);
+  writeUint16LE(endRecord, 10, entries.length);
+  writeUint32LE(endRecord, 12, centralSize);
+  writeUint32LE(endRecord, 16, centralOffset);
+  writeUint16LE(endRecord, 20, 0);
+
+  return concatUint8([...localChunks, ...centralChunks, endRecord]);
+}
+
 export function cleanJpeg(input) {
   const bytes = toUint8Array(input);
 
@@ -304,6 +381,11 @@ function writeUint32LE(bytes, offset, value) {
   bytes[offset + 3] = (value >>> 24) & 0xff;
 }
 
+function writeUint16LE(bytes, offset, value) {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >>> 8) & 0xff;
+}
+
 function concatUint8(chunks) {
   const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
   const output = new Uint8Array(length);
@@ -315,6 +397,63 @@ function concatUint8(chunks) {
   }
 
   return output;
+}
+
+function normalizeZipBytes(input) {
+  if (input instanceof Uint8Array) {
+    return input;
+  }
+
+  if (input instanceof ArrayBuffer) {
+    return new Uint8Array(input);
+  }
+
+  if (ArrayBuffer.isView(input)) {
+    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  }
+
+  if (Array.isArray(input)) {
+    return Uint8Array.from(input);
+  }
+
+  throw new Error("ZIP girdisi okunamadı.");
+}
+
+function uniqueZipName(name, usedNames) {
+  let candidate = name;
+  let index = 2;
+
+  while (usedNames.has(candidate)) {
+    candidate = appendNameSuffix(name, index);
+    index += 1;
+  }
+
+  usedNames.add(candidate);
+  return candidate;
+}
+
+function appendNameSuffix(name, index) {
+  const slashIndex = name.lastIndexOf("/");
+  const dotIndex = name.lastIndexOf(".");
+
+  if (dotIndex > slashIndex) {
+    return `${name.slice(0, dotIndex)}-${index}${name.slice(dotIndex)}`;
+  }
+
+  return `${name}-${index}`;
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+
+  return (crc ^ 0xffffffff) >>> 0;
 }
 
 async function loadFfmpeg(onStatus) {
@@ -448,19 +587,27 @@ function formatBytes(bytes) {
 
 function initApp() {
   const picker = document.querySelector("[data-file-picker]");
+  const folderPicker = document.querySelector("[data-folder-picker]");
   const dropZone = document.querySelector("[data-drop-zone]");
   const queue = document.querySelector("[data-queue]");
   const emptyState = document.querySelector("[data-empty]");
   const summary = document.querySelector("[data-summary]");
   const clearButton = document.querySelector("[data-clear]");
+  const downloadAllButton = document.querySelector("[data-download-all]");
   const chooseButton = document.querySelector("[data-choose]");
+  const chooseFolderButton = document.querySelector("[data-choose-folder]");
   const items = [];
   let processing = false;
 
   chooseButton.addEventListener("click", () => picker.click());
+  chooseFolderButton.addEventListener("click", () => folderPicker.click());
   picker.addEventListener("change", () => {
     addFiles(Array.from(picker.files || []));
     picker.value = "";
+  });
+  folderPicker.addEventListener("change", () => {
+    addFiles(Array.from(folderPicker.files || []));
+    folderPicker.value = "";
   });
 
   dropZone.addEventListener("dragover", (event) => {
@@ -487,6 +634,7 @@ function initApp() {
     }
     renderSummary();
   });
+  downloadAllButton.addEventListener("click", downloadCleanedZip);
 
   function addFiles(files) {
     for (const file of files) {
@@ -512,6 +660,7 @@ function initApp() {
     }
 
     processing = false;
+    renderSummary();
   }
 
   async function processItem(item) {
@@ -528,13 +677,18 @@ function initApp() {
       if (isSupportedImage(file)) {
         const result = cleanImageBytes(await file.arrayBuffer(), file.type, file.name);
         const blob = new Blob([result.bytes], { type: result.type });
-        setItemOutput(item, blob, outputFileName(file.name, result.extension));
+        setItemOutput(
+          item,
+          blob,
+          outputFileName(file.name, result.extension),
+          outputFileName(file.webkitRelativePath || file.name, result.extension),
+        );
         setItemStatus(item, "done", "Temizlendi");
         return;
       }
 
       const blob = await cleanVideoFile(file, (message) => setItemStatus(item, "working", message));
-      setItemOutput(item, blob, outputFileName(file.name));
+      setItemOutput(item, blob, outputFileName(file.name), outputFileName(file.webkitRelativePath || file.name));
       setItemStatus(item, "done", "Temizlendi");
     } catch (error) {
       setItemStatus(item, "error", error instanceof Error ? error.message : "İşlem tamamlanamadı");
@@ -555,12 +709,15 @@ function initApp() {
 
     const name = row.querySelector(".file-name");
     const meta = row.querySelector(".file-meta");
-    name.textContent = file.name;
+    name.textContent = file.webkitRelativePath || file.name;
     meta.textContent = `${formatBytes(file.size)} · ${file.type || getExtension(file.name).toUpperCase() || "dosya"}`;
 
     return {
       element: row,
       file,
+      blob: null,
+      outputName: "",
+      outputPath: "",
       state: "pending",
       url: "",
     };
@@ -573,17 +730,48 @@ function initApp() {
     status.textContent = message;
   }
 
-  function setItemOutput(item, blob, name) {
+  function setItemOutput(item, blob, name, pathName) {
     if (item.url) {
       URL.revokeObjectURL(item.url);
     }
 
+    item.blob = blob;
+    item.outputName = name;
+    item.outputPath = pathName || name;
     item.url = URL.createObjectURL(blob);
     const link = item.element.querySelector(".download");
     link.href = item.url;
     link.download = name;
     link.removeAttribute("aria-disabled");
     link.textContent = "İndir";
+  }
+
+  async function downloadCleanedZip() {
+    const hasActiveWork = items.some((item) => item.state === "pending" || item.state === "working");
+    const doneItems = items.filter((item) => item.state === "done" && item.blob);
+
+    if (hasActiveWork || doneItems.length === 0) {
+      return;
+    }
+
+    const previousLabel = downloadAllButton.textContent;
+    downloadAllButton.disabled = true;
+    downloadAllButton.textContent = "ZIP hazırlanıyor";
+
+    try {
+      const entries = [];
+      for (const item of doneItems) {
+        entries.push({
+          name: item.outputPath || item.outputName,
+          bytes: new Uint8Array(await item.blob.arrayBuffer()),
+        });
+      }
+
+      triggerDownload(new Blob([createStoredZip(entries)], { type: "application/zip" }), "metadata-temiz.zip");
+    } finally {
+      downloadAllButton.textContent = previousLabel;
+      renderSummary();
+    }
   }
 
   function renderSummary() {
@@ -593,8 +781,20 @@ function initApp() {
     const done = items.filter((item) => item.state === "done").length;
     const failed = items.filter((item) => item.state === "error").length;
     const pending = items.filter((item) => item.state === "pending" || item.state === "working").length;
+    downloadAllButton.disabled = done === 0 || pending > 0;
     summary.textContent = `${items.length} dosya · ${done} temiz · ${pending} bekliyor/işleniyor · ${failed} hata`;
   }
+}
+
+function triggerDownload(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 if (typeof document !== "undefined") {
